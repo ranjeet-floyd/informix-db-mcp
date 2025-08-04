@@ -22,9 +22,14 @@ import java.util.logging.Level;
 public class InformixMCPServer {
     
     private static final Logger LOGGER = Logger.getLogger(InformixMCPServer.class.getName());
-    private static final String MCP_VERSION = "2024-11-05";
-    private static final String SERVER_NAME = "informix-mcp-server";
-    private static final String SERVER_VERSION = "1.0.0";
+    
+    private String protocolVersion = "2024-11-05";
+    private String serverName = "informix-mcp-server";
+    private String serverVersion = "1.0.0";
+    private int queryTimeout = 30;
+    private int maxRows = 10000;
+    private boolean readonlyEnforced = false;
+    private boolean readonlyMode = false;
     
     private final ObjectMapper objectMapper;
     private final Map<String, Connection> connections;
@@ -55,6 +60,15 @@ public class InformixMCPServer {
             if (serverName == null) {
                 serverName = "default"; // default value
             }
+            this.url = String.format("jdbc:informix-sqli://%s:%d/%s:INFORMIXSERVER=%s", 
+                                   host, port, database, serverName);
+            this.username = username;
+            this.password = password;
+            this.driverClass = "com.informix.jdbc.IfxDriver";
+        }
+        
+        public DatabaseConfig(String host, int port, String database, 
+                            String username, String password, String serverName) {
             this.url = String.format("jdbc:informix-sqli://%s:%d/%s:INFORMIXSERVER=%s", 
                                    host, port, database, serverName);
             this.username = username;
@@ -131,11 +145,11 @@ public class InformixMCPServer {
      */
     private JsonNode handleInitialize(int id, JsonNode params) {
         ObjectNode result = objectMapper.createObjectNode();
-        result.put("protocolVersion", MCP_VERSION);
+        result.put("protocolVersion", protocolVersion);
         
         ObjectNode serverInfo = objectMapper.createObjectNode();
-        serverInfo.put("name", SERVER_NAME);
-        serverInfo.put("version", SERVER_VERSION);
+        serverInfo.put("name", serverName);
+        serverInfo.put("version", serverVersion);
         result.set("serverInfo", serverInfo);
         
         ObjectNode capabilities = objectMapper.createObjectNode();
@@ -155,7 +169,7 @@ public class InformixMCPServer {
         // Query tool
         ObjectNode queryTool = objectMapper.createObjectNode();
         queryTool.put("name", "query");
-        queryTool.put("description", "Execute SQL queries on Informix database");
+        queryTool.put("description", "Execute SQL queries on Informix database (supports all SQL operations)");
         
         ObjectNode querySchema = objectMapper.createObjectNode();
         querySchema.put("type", "object");
@@ -168,7 +182,7 @@ public class InformixMCPServer {
         
         ObjectNode readOnlyProp = objectMapper.createObjectNode();
         readOnlyProp.put("type", "boolean");
-        readOnlyProp.put("description", "Whether query is read-only (default: true)");
+        readOnlyProp.put("description", "Whether query is read-only (default: false, allows all operations)");
         queryProps.set("readonly", readOnlyProp);
         
         querySchema.set("properties", queryProps);
@@ -229,7 +243,7 @@ public class InformixMCPServer {
      */
     private JsonNode handleQueryTool(int id, JsonNode arguments) throws SQLException {
         String sql = arguments.get("sql").asText();
-        boolean readonly = arguments.has("readonly") ? arguments.get("readonly").asBoolean() : true;
+        boolean readonly = arguments.has("readonly") ? arguments.get("readonly").asBoolean() : false;
         
         // Additional SQL injection check
         if (containsSqlInjection(sql)) {
@@ -323,6 +337,12 @@ public class InformixMCPServer {
      * @return true if the query is read-only, false otherwise
      */
     private boolean isReadOnlyQuery(String sql) {
+        // If readonly mode is disabled globally, allow all operations
+        if (!readonlyMode) {
+            return false; // Allow all operations
+        }
+        
+        // If readonly mode is enabled, only allow specific read-only operations
         String sqlUpper = sql.trim().toUpperCase();
         
         return sqlUpper.startsWith("SELECT") || 
@@ -567,29 +587,59 @@ public class InformixMCPServer {
         connections.clear();
     }
     
+    // Getter and setter methods
+    public String getProtocolVersion() { return protocolVersion; }
+    public void setProtocolVersion(String protocolVersion) { this.protocolVersion = protocolVersion; }
+    
+    public String getServerName() { return serverName; }
+    public void setServerName(String serverName) { this.serverName = serverName; }
+    
+    public String getServerVersion() { return serverVersion; }
+    public void setServerVersion(String serverVersion) { this.serverVersion = serverVersion; }
+    
+    public int getQueryTimeout() { return queryTimeout; }
+    public void setQueryTimeout(int queryTimeout) { this.queryTimeout = queryTimeout; }
+    
+    public int getMaxRows() { return maxRows; }
+    public void setMaxRows(int maxRows) { this.maxRows = maxRows; }
+    
+    public boolean isReadonlyEnforced() { return readonlyEnforced; }
+    public void setReadonlyEnforced(boolean readonlyEnforced) { this.readonlyEnforced = readonlyEnforced; }
+    
+    public boolean isReadonlyMode() { return readonlyMode; }
+    public void setReadonlyMode(boolean readonlyMode) { this.readonlyMode = readonlyMode; }
+    
     /**
      * Main method
      */
     public static void main(String[] args) {
-        // Parse command line arguments or environment variables
-        String host = System.getenv("INFORMIX_HOST");
-        String port = System.getenv("INFORMIX_PORT");
-        String database = System.getenv("INFORMIX_DATABASE");
-        String username = System.getenv("INFORMIX_USERNAME");
-        String password = System.getenv("INFORMIX_PASSWORD");
+        // Load server configuration from properties file
+        com.example.informix.mcp.config.ServerConfig serverConfig = 
+            com.example.informix.mcp.config.ServerConfig.createDefault();
         
-        if (host == null || database == null || username == null || password == null) {
-            System.err.println("Required environment variables not set:");
-            System.err.println("INFORMIX_HOST, INFORMIX_DATABASE, INFORMIX_USERNAME, INFORMIX_PASSWORD");
-            System.err.println("Optional: INFORMIX_PORT (default: 9088)");
-            System.exit(1);
-        }
+        // Create database configuration
+        DatabaseConfig dbConfig = new DatabaseConfig(
+            serverConfig.getDbHost(),
+            serverConfig.getDbPort(),
+            serverConfig.getDbName(),
+            serverConfig.getDbUsername(),
+            serverConfig.getDbPassword(),
+            serverConfig.getDbServerName()
+        );
         
-        int portNum = port != null ? Integer.parseInt(port) : 9088;
+        // Create and configure server
+        InformixMCPServer server = new InformixMCPServer(dbConfig);
         
-        DatabaseConfig config = new DatabaseConfig(host, portNum, database, username, password);
-        InformixMCPServer server = new InformixMCPServer(config);
+        // Configure server settings from the ServerConfig
+        server.setServerName(serverConfig.getServerName());
+        server.setServerVersion(serverConfig.getServerVersion());
+        server.setProtocolVersion(serverConfig.getProtocolVersion());
+        server.setQueryTimeout(serverConfig.getQueryTimeout());
+        server.setMaxRows(serverConfig.getMaxRows());
+        server.setReadonlyEnforced(serverConfig.isReadonlyEnforced());
+        server.setReadonlyMode(serverConfig.isReadonlyMode());
         
+        // Start the server
         server.start();
     }
 }
