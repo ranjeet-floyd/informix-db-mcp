@@ -1,0 +1,11 @@
+target/
+*.log
+logs/
+.env
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.class
+.env.example
+dependency-reduced-pom.xml

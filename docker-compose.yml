@@ -1,0 +1,14 @@
+services:
+  informix-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: informix-mcp-server:1.0.0
+    container_name: informix-mcp-server
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - JAVA_OPTS=-Xms256m -Xmx512m
+    restart: unless-stopped
+    # Use stdin_open and tty for interactive MCP communication
+    stdin_open: true
+    tty: true
